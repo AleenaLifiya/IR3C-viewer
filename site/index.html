@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Real or Reconstructed?</title>
+<meta name="description" content="Browse MRI volumes and guess whether each one was fully acquired or reconstructed from a fraction of its slices by IR3C.">
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1c2430; --ink2: #5b6676; --line: #dde2e8;
+  --accent: #2b6cb0; --accent-ink: #ffffff; --good: #2f855a; --bad: #c05621;
+  --chip: #eef2f7;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161c; --panel: #1a2029; --ink: #e6eaf0; --ink2: #9aa5b4; --line: #2b333f;
+    --accent: #63a4ff; --accent-ink: #0d1117; --good: #68d391; --bad: #f6ad55; --chip: #232b36;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161c; --panel: #1a2029; --ink: #e6eaf0; --ink2: #9aa5b4; --line: #2b333f;
+  --accent: #63a4ff; --accent-ink: #0d1117; --good: #68d391; --bad: #f6ad55; --chip: #232b36;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 1.6rem; margin: 0 0 4px; }
+.sub { color: var(--ink2); margin: 0 0 20px; max-width: 760px; }
+.grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; }
+@media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.list h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink2); margin: 10px 0 6px; }
+.case { display: flex; justify-content: space-between; align-items: center; width: 100%;
+  padding: 7px 10px; margin: 2px 0; border: 1px solid transparent; border-radius: 7px;
+  background: none; color: var(--ink); font: inherit; cursor: pointer; text-align: left; }
+.case:hover { background: var(--chip); }
+.case.on { border-color: var(--accent); background: var(--chip); }
+.tag { font-size: .75rem; color: var(--ink2); }
+.tag.good { color: var(--good); } .tag.bad { color: var(--bad); }
+.viewer { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.vhead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px; }
+.vhead h3 { margin: 0; font-size: 1.1rem; }
+.stage { position: relative; width: 100%; height: min(62vh, 560px); background: #000;
+  border-radius: 8px; overflow: hidden; }
+.stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg button, .act button { font: inherit; border: 1px solid var(--line); background: var(--panel);
+  color: var(--ink); padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+.seg button.on { background: var(--chip); border-color: var(--accent); }
+.act button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.act button:disabled { opacity: .5; cursor: default; }
+.reveal { padding: 10px 12px; border-radius: 8px; background: var(--chip); min-height: 1.5em; }
+.reveal b.good { color: var(--good); } .reveal b.bad { color: var(--bad); }
+.hint { color: var(--ink2); font-size: .85rem; }
+.score { font-variant-numeric: tabular-nums; color: var(--ink2); }
+footer { margin-top: 28px; color: var(--ink2); font-size: .85rem; max-width: 820px; }
+footer p { margin: 6px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Real or reconstructed?</h1>
+  <p class="sub">Some of these MRI volumes were fully acquired. In the others, only one slice in
+  every 2, 4 or 8 was kept, and the rest were reconstructed by IR3C. Scroll through each
+  volume and decide. Your answers stay in your browser: nothing is sent or recorded.</p>
+  <p class="sub">Slice mask: uniform sampling. With a factor of R, every R-th slice is kept
+  (the first and last slices always), the kept slices are shown exactly as acquired, and only
+  the slices between them are reconstructed.</p>
+
+  <div class="grid">
+    <div class="panel list" id="list"></div>
+    <div class="panel viewer">
+      <div class="vhead"><h3 id="title">Loading…</h3><span class="score" id="score"></span></div>
+      <div class="stage"><canvas id="gl"></canvas></div>
+      <div class="row seg" id="views">
+        <button data-v="mpr" class="on">All planes</button>
+        <button data-v="ax">Axial</button>
+        <button data-v="cor">Coronal</button>
+        <button data-v="sag">Sagittal</button>
+      </div>
+      <p class="hint">Click or drag in the image to move through the volume; scroll to change
+      slice. <span id="axisHint"></span></p>
+      <div class="row act">
+        <button class="primary" id="bReal">Real</button>
+        <button class="primary" id="bRec">Reconstructed</button>
+      </div>
+      <div class="reveal" id="reveal">Make your guess to see the answer.</div>
+    </div>
+  </div>
+
+  <footer>
+    <p>Reconstructions are produced by IR3C, described in “Anchor, then correct: what makes
+    missing-slice MRI reconstruction robust to the slice pattern” (under review). Slices
+    were removed synthetically from complete research scans; acquired slices are kept
+    unchanged. All subjects are from the held-out test split.</p>
+    <p>These are research images, not for clinical use. Intensities are shown as 8-bit
+    images, windowed at each volume's 99.5th percentile.</p>
+    <p>Data: BraTS 2023 adult glioma challenge (validation release); OAI-ZIB knee MRI,
+    derived from the Osteoarthritis Initiative; IXI-tiny, a downsampled version of the IXI
+    dataset (brain-development.org/ixi-dataset, CC BY-SA 3.0). IXI-tiny is downsampled to
+    83&times;44&times;55 voxels (about 2&times;4&times;4&nbsp;mm), so its two examples look
+    coarse whether real or reconstructed.</p>
+  </footer>
+</div>
+
+<script src="cases.js"></script>
+<script type="module">
+let stopped = false;
+const status = (msg) => {
+  if (stopped) return;
+  document.getElementById("title").textContent = "Viewer could not start";
+  document.getElementById("reveal").textContent = msg;
+};
+window.addEventListener("error", e => status("Error: " + (e.message || e)));
+window.addEventListener("unhandledrejection", e => status("Error: " + (e.reason?.message || e.reason)));
+const stop = (msg) => { status(msg); stopped = true; throw new Error(msg); };
+if (location.protocol === "file:") {
+  stop("This page must be served over http(s), not opened as a file. Run " +
+         "\"python3 -m http.server\" in the site folder and open http://localhost:8000, " +
+         "or use the published GitHub Pages link.");
+}
+if (!document.createElement("canvas").getContext("webgl2")) {
+  stop("Your browser has WebGL2 turned off or unavailable, which the MRI viewer needs. " +
+         "Try a current Chrome, Firefox, Edge or Safari with hardware acceleration enabled.");
+}
+const { Niivue } = await import("./vendor/niivue-0.44.2.js");
+
+const KEY = JSON.parse(atob(window.KEY));
+const CASES = window.CASES;
+const guesses = {};          // in memory only; cleared on reload
+const nv = new Niivue({ backColor: [0, 0, 0, 1], show3Dcrosshair: false, crosshairWidth: 0.5,
+                        crosshairColor: [0.4, 0.6, 1, 0.6], isRadiologicalConvention: true });
+await nv.attachTo("gl");
+let cur = null;
+
+const list = document.getElementById("list");
+let lastDs = null;
+for (const c of CASES) {
+  if (c.dataset !== lastDs) {
+    const h = document.createElement("h2"); h.textContent = c.label; list.appendChild(h);
+    lastDs = c.dataset;
+  }
+  const b = document.createElement("button");
+  b.className = "case"; b.dataset.id = c.id;
+  b.innerHTML = `<span>Case ${c.id.split("_")[1]}</span><span class="tag" id="t_${c.id}"></span>`;
+  b.onclick = () => open(c.id);
+  list.appendChild(b);
+}
+
+function score() {
+  const ids = Object.keys(guesses);
+  const ok = ids.filter(i => guesses[i] === !!KEY[i][0]).length;
+  document.getElementById("score").textContent = ids.length ? `${ok} / ${ids.length} correct` : "";
+}
+
+function showReveal(id) {
+  const r = document.getElementById("reveal");
+  const [real, factor, kept, slices] = KEY[id];
+  const g = guesses[id];
+  const both = [document.getElementById("bReal"), document.getElementById("bRec")];
+  both.forEach(b => b.disabled = g !== undefined);
+  if (g === undefined) { r.textContent = "Make your guess to see the answer."; return; }
+  const right = g === !!real;
+  const truth = real ? "a fully acquired volume"
+    : `reconstructed: ${kept} of ${slices} slices were kept (${factor}, uniform mask: one ` +
+      `slice in every ${factor.slice(1)}, first and last kept), the rest are IR3C`;
+  r.innerHTML = `<b class="${right ? "good" : "bad"}">${right ? "Correct" : "Not quite"}.</b> This is ${truth}.`;
+}
+
+async function open(id) {
+  cur = id;
+  document.querySelectorAll(".case").forEach(b => b.classList.toggle("on", b.dataset.id === id));
+  const c = CASES.find(x => x.id === id);
+  document.getElementById("title").textContent = `${c.label} · case ${id.split("_")[1]}`;
+  const ax = c.dataset === "OAIZIB" ? "sagittal" : "axial";
+  document.getElementById("axisHint").textContent = `If slices are missing, they are ${ax} ` +
+    `slices, so any reconstruction shows best in the other two planes.`;
+  document.getElementById("reveal").textContent = "Loading volume…";
+  try {
+    await nv.loadVolumes([{ url: `volumes/${id}.nii.gz`, colormap: "gray", cal_min: 0, cal_max: 255 }]);
+  } catch (e) {
+    document.getElementById("reveal").textContent = `Could not load this volume (${e.message || e}).`;
+    return;
+  }
+  showReveal(id);
+}
+
+function guess(isReal) {
+  if (!cur || guesses[cur] !== undefined) return;
+  guesses[cur] = isReal;
+  const right = isReal === !!KEY[cur][0];
+  const t = document.getElementById("t_" + cur);
+  t.textContent = KEY[cur][0] ? "real" : "reconstructed";
+  t.className = "tag " + (right ? "good" : "bad");
+  showReveal(cur); score();
+}
+document.getElementById("bReal").onclick = () => guess(true);
+document.getElementById("bRec").onclick = () => guess(false);
+
+const VIEW = { mpr: nv.sliceTypeMultiplanar, ax: nv.sliceTypeAxial,
+               cor: nv.sliceTypeCoronal, sag: nv.sliceTypeSagittal };
+document.querySelectorAll("#views button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#views button").forEach(x => x.classList.toggle("on", x === b));
+  nv.setSliceType(VIEW[b.dataset.v]);
+});
+
+open(CASES[0].id);
+</script>
+</body>
+</html>
